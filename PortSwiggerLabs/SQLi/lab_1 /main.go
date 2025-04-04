@@ -3,7 +3,6 @@ package main
 // lab url: https://portswigger.net/web-security/learning-paths/sql-injection/sql-injection-retrieving-hidden-data/sql-injection/lab-retrieve-hidden-data
 
 import (
-//	"crypto/tls"
 	"fmt"
 	"io"
 	"net/http"
@@ -16,12 +15,6 @@ import (
 const uri = "/filter?category="
 
 func main() {
-//	if len(os.Args) != 3 {
-//		fmt.Printf("[-] Usage: %s <uri> <payload>\n", os.Args[0])
-//		fmt.Printf("[-] Example: %s www.example.com \"1=1\"\n", os.Args[0])
-//		os.Exit(1)
-//	}
-
 	labURL, payload, proxyURL := parseArgs()
 
 	if exploitSQLi(labURL, payload, proxyURL) {
