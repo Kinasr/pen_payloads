@@ -15,6 +15,7 @@ build/
 
 # Ignore system files
 .DS_Store
+CVE-2022-0944/.DS_Store
 Thumbs.db
 
 # Ignore IDE specific files
